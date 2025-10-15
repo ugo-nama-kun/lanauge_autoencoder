@@ -114,7 +114,7 @@ class Decoder(nn.Module):
 
         # z: [B, L, vocab_size], lengths: [B]
         z_emb = self.embedding(message)  # [B, L, emb]
-        z_emb = torch.elu(self.embed_norm(self.dropout(z_emb)))
+        z_emb = F.elu(self.embed_norm(self.dropout(z_emb)))
 
         packed = nn.utils.rnn.pack_padded_sequence(z_emb, lengths, batch_first=True, enforce_sorted=False)
         out_packed, _ = self.gru(packed)
