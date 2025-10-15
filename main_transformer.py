@@ -129,7 +129,7 @@ for step in range(max_steps):
     for _ in range(batch_size):
         index = np.random.randint(0, 10)
         x.append(transform(mnist_handler.get_random_image(index)))
-    x = torch.FloatTensor(np.asarray(x)).to(device)
+    x = torch.stack(x).to(device)
 
     optimizer.zero_grad()
     message, lengths = encoder(x, temperature)
@@ -159,7 +159,7 @@ with torch.no_grad():
     x = []
     for index in range(10):
         x.append(transform(mnist_handler.get_random_image(index)))
-    x = torch.FloatTensor(np.asarray(x)).to(device)
+    x = torch.stack(x).to(device)
 
     message, lengths = encoder(x, temperature)
     x_recon = decoder(message, lengths)

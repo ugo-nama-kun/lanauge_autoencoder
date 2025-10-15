@@ -45,6 +45,10 @@ class MNISTHandler:
 
 
 if __name__ == '__main__':
+    from torchvision import transforms
+    transform = transforms.Compose([
+        transforms.ToTensor()
+    ])
 
     # Example usage
     mnist_handler = MNISTHandler(train=True)
@@ -52,6 +56,7 @@ if __name__ == '__main__':
         img = mnist_handler.get_random_image(i)
 
         # Display the image
+        print(transform(img).max(), transform(img).min())
         plt.imshow(img, cmap="gray")
         plt.title(f"Random MNIST Image of {i}")
         plt.axis("off")
