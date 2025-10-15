@@ -19,9 +19,10 @@ base_vocab_size = 4
 embedding_dim = 32
 hidden_dim = 512
 temperature = 0.5
-batch_size = 128
-max_steps = 5_000
-lr = 3e-4
+batch_size = 512
+max_steps = 10_000
+num_plots = 100
+lr = 1e-4
 max_grad_norm = 1.0
 dropout_p = 0.05
 w_entropy = 0.05
@@ -49,7 +50,7 @@ class Encoder(nn.Module):
     def forward(self, x, tau):
         B = x.size(0)
         x = x.view(B, -1)
-        context = F.gelu(self.fc_norm(self.fc(x)))  # [B, H]
+        context = F.elu(self.fc_norm(self.fc(x)))  # [B, H]
         h = context.unsqueeze(0)  # [1, B, H]
 
         # t=0 の入力: 学習BOSベクトルを [B, 1, E] に拡張
@@ -113,7 +114,7 @@ class Decoder(nn.Module):
 
         # z: [B, L, vocab_size], lengths: [B]
         z_emb = self.embedding(message)  # [B, L, emb]
-        z_emb = self.embed_norm(self.dropout(z_emb))
+        z_emb = torch.elu(self.embed_norm(self.dropout(z_emb)))
 
         packed = nn.utils.rnn.pack_padded_sequence(z_emb, lengths, batch_first=True, enforce_sorted=False)
         out_packed, _ = self.gru(packed)
@@ -225,7 +226,7 @@ for step in range(max_steps):
     # -------------------------------
     # 再構成可視化
     # -------------------------------
-    if step % int(max_steps / 20) == 0:
+    if step % int(max_steps / num_plots) == 0:
         plt.figure(1)
         plt.clf()
         encoder.eval()
