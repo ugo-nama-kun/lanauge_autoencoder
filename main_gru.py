@@ -14,15 +14,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ハイパーパラメータ
 # -------------------------------
 input_dim = 28 * 28
-max_seq_len = 10
-base_vocab_size = 4
+max_seq_len = 5
+base_vocab_size = 2
 embedding_dim = 32
 hidden_dim = 512
 temperature = 0.5
-batch_size = 512
-max_steps = 10_000
-num_plots = 100
-lr = 1e-4
+batch_size = 128
+max_steps = 1_000
+num_plots = 10
+lr = 3e-4
 max_grad_norm = 1.0
 dropout_p = 0.05
 w_entropy = 0.05
@@ -33,15 +33,15 @@ w_entropy = 0.05
 class Encoder(nn.Module):
     def __init__(self, input_dim, hidden_dim, max_seq_len, vocab_size, dropout_p):
         super().__init__()
-        self.fc = nn.Linear(input_dim, hidden_dim)
+        self.encoder = nn.Linear(input_dim, hidden_dim)
         # self.dropout = nn.Dropout(dropout_p)
-        self.fc_norm = nn.LayerNorm(hidden_dim)
 
         self.gru = nn.GRU(embedding_dim, hidden_dim, batch_first=True)
-        self.gru_norm = nn.LayerNorm(hidden_dim)
+        self.gru_ln = nn.LayerNorm(hidden_dim)
 
         self.initial_embedding = nn.Parameter(torch.randn(1, embedding_dim), requires_grad=True)
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.embedding = nn.Linear(vocab_size, embedding_dim, bias=False)
+        self.embed_ln = nn.LayerNorm(embedding_dim)
 
         self.token_proj = nn.Linear(hidden_dim, vocab_size)
         self.max_seq_len = max_seq_len
@@ -50,18 +50,19 @@ class Encoder(nn.Module):
     def forward(self, x, tau):
         B = x.size(0)
         x = x.view(B, -1)
-        context = F.elu(self.fc_norm(self.fc(x)))  # [B, H]
+
+        context = F.leaky_relu(self.encoder(x))  # [B, H]
         h = context.unsqueeze(0)  # [1, B, H]
 
         # t=0 の入力: 学習BOSベクトルを [B, 1, E] に拡張
-        inp = self.initial_embedding.expand(B, 1, -1)  # [B, 1, E]
+        inp = self.embed_ln(self.initial_embedding).expand(B, 1, -1)  # [B, 1, E]
 
         tokens = []
         prev_msg = None
         loss_entropy = 0.0
         for t in range(self.max_seq_len):
             out, h = self.gru(inp, h)  # out: [B, 1, H]
-            out = self.gru_norm(out.squeeze(1))  # [B, H]
+            out = self.gru_ln(out.squeeze(1))  # [B, H]
 
             logits = self.token_proj(out)  # [B, V]
             probs = F.softmax(logits, dim=-1)
@@ -69,7 +70,7 @@ class Encoder(nn.Module):
             tokens.append(y)
 
             # 次の時刻の入力を one-hot から埋め込みへ: y @ W で [B, E]
-            emb_next = torch.matmul(y, self.embedding.weight)  # [B, E]
+            emb_next = self.embed_ln(self.embedding(y))  # [B, E]
             inp = emb_next.unsqueeze(1)  # [B, 1, E]
 
             # エントロピー（平均は最後に取る）
@@ -100,31 +101,36 @@ class GaussianDropout(nn.Module):
             return x
 
 class Decoder(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim, output_dim, dropout_p):
+    def __init__(self, vocab_size, embedding_dim, hidden_dim, max_seq_len, output_dim, dropout_p):
         super().__init__()
+        self.hidden_dim = hidden_dim
+        self.max_seq_len = max_seq_len
         self.embedding = nn.Linear(vocab_size, embedding_dim)
         self.dropout = GaussianDropout(dropout_p)
-        self.embed_norm = nn.LayerNorm(embedding_dim)
+        self.embed_ln = nn.LayerNorm(embedding_dim)
+        self.initial_embedding = nn.Parameter(torch.randn(1, embedding_dim), requires_grad=True)
+
         self.gru = nn.GRU(embedding_dim, hidden_dim, batch_first=True)
-        self.gru_norm = nn.LayerNorm(hidden_dim)
+        self.gru_ln = nn.LayerNorm(hidden_dim)
         self.fc = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, message):
-        lengths = [max_seq_len]*message.shape[0]
+        B = message.size(0)
 
         # z: [B, L, vocab_size], lengths: [B]
-        z_emb = self.embedding(message)  # [B, L, emb]
-        z_emb = F.elu(self.embed_norm(self.dropout(z_emb)))
+        inp = self.embed_ln(self.initial_embedding).expand(B, -1, -1)
 
-        packed = nn.utils.rnn.pack_padded_sequence(z_emb, lengths, batch_first=True, enforce_sorted=False)
-        out_packed, _ = self.gru(packed)
-        out, _ = nn.utils.rnn.pad_packed_sequence(out_packed, batch_first=True)  # [B, L, H]
+        h = torch.zeros(1, B, self.hidden_dim, device=message.device)  # [1, B, H]
+        for t in range(self.max_seq_len):
+            out, h = self.gru(inp, h)  # out: [B, 1, H]
+            out = self.gru_ln(out.squeeze(1))  # [B, H]
 
-        out = self.gru_norm(self.dropout(out))
+            inp = self.embedding(message[:, t]) # [B, L, emb]
+            inp = self.embed_ln(self.dropout(inp)).unsqueeze(1)
 
         # 最後の有効時刻の hidden state を抽出
-        last_hidden = torch.stack([out[i, l - 1] for i, l in enumerate(lengths)], dim=0)  # [B, H]
-        x_recon = torch.sigmoid(self.fc(last_hidden))  # [B, output_dim]
+        last_hidden = h.squeeze(0)
+        x_recon = torch.sigmoid(self.fc(self.gru_ln(self.dropout(last_hidden))))  # [B, output_dim]
         return x_recon
 
 # -------------------------------
@@ -172,7 +178,7 @@ transform = transforms.Compose([
 # モデルと最適化
 # -------------------------------
 encoder = Encoder(input_dim, hidden_dim, max_seq_len, base_vocab_size, dropout_p).to(device)
-decoder = Decoder(base_vocab_size, embedding_dim, hidden_dim, input_dim, dropout_p).to(device)
+decoder = Decoder(base_vocab_size, embedding_dim, hidden_dim, max_seq_len, input_dim, dropout_p).to(device)
 init_encoder_decoder(encoder, decoder)
 
 optimizer = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()), lr=lr)
@@ -182,6 +188,8 @@ loss_fn = nn.BCELoss()
 # 学習ループ
 # -------------------------------
 print("start")
+fig_visual, axs_visual = plt.subplots(2, 10, figsize=(15, 3))
+
 loss_hist = []
 for step in range(max_steps):
     encoder.train()
@@ -227,8 +235,6 @@ for step in range(max_steps):
     # 再構成可視化
     # -------------------------------
     if step % int(max_steps / num_plots) == 0:
-        plt.figure(1)
-        plt.clf()
         encoder.eval()
         decoder.eval()
         with torch.no_grad():
@@ -246,12 +252,11 @@ for step in range(max_steps):
                 token_seq = message_ids[index].tolist()
                 print(f"{index} : {token_seq}")
 
-            fig, axs = plt.subplots(2, 10, figsize=(15, 3))
             for i in range(10):
-                axs[0, i].imshow(x[i].cpu().squeeze(), cmap='gray')
-                axs[1, i].imshow(x_recon[i].squeeze(), cmap='gray')
-                axs[0, i].axis('off')
-                axs[1, i].axis('off')
+                axs_visual[0, i].imshow(x[i].cpu().squeeze(), cmap='gray')
+                axs_visual[1, i].imshow(x_recon[i].squeeze(), cmap='gray')
+                axs_visual[0, i].axis('off')
+                axs_visual[1, i].axis('off')
             plt.suptitle(f"Original (Top) and Reconstructed (Bottom) @ {step}")
         plt.pause(0.01)
 
