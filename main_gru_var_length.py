@@ -20,7 +20,7 @@ eos_token_id = base_vocab_size
 vocab_size = base_vocab_size + 1  # EOSを追加
 
 embedding_dim = 32
-hidden_dim = 128
+hidden_dim = 64
 temperature = 1.0
 batch_size = 128
 max_steps = 10_000
@@ -33,7 +33,7 @@ w_entropy = 0.0
 # Encoder
 # -------------------------------
 class Encoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, max_seq_len, vocab_size):
+    def __init__(self, input_dim, hidden_dim, max_seq_len, vocab_size, eos_token_id):
         super().__init__()
         self.encoder = nn.Linear(input_dim, hidden_dim)
 
@@ -45,6 +45,8 @@ class Encoder(nn.Module):
         self.token_proj = nn.Linear(hidden_dim, vocab_size)
         self.max_seq_len = max_seq_len
         self.vocab_size = vocab_size
+
+        self.eos_token_id = eos_token_id
 
     def forward(self, x, tau):
         B = x.size(0)
@@ -58,8 +60,8 @@ class Encoder(nn.Module):
 
         tokens = []
         loss_entropy = 0.0
-        lengths = torch.full((batch_size,), self.max_seq_len, dtype=torch.long, device=x.device)
-        finished = torch.zeros(batch_size, dtype=torch.bool, device=x.device)
+        lengths = torch.full((B,), self.max_seq_len, dtype=torch.long, device=x.device)
+        finished = torch.zeros(B, dtype=torch.bool, device=x.device)
 
         for t in range(self.max_seq_len):
             out, h = self.gru(inp, h)  # out: [B, 1, H]
@@ -114,13 +116,17 @@ class Decoder(nn.Module):
         inp = self.initial_embedding.expand(B, -1, -1)
 
         h = torch.zeros(1, B, self.hidden_dim, device=message.device)  # [1, B, H]
+        h_list = []
         for t in range(self.max_seq_len):
             _, h = self.gru(inp, h)  # out: [B, 1, H]
+            h_list.append(h)
 
             inp = self.embedding(message[:, t]).unsqueeze(1) # [B, L, emb]
 
         # 最後の有効時刻の hidden state を抽出
-        last_hidden = h.squeeze(0)
+        last_hidden = torch.stack([h_list[l - 1][0, i] for i, l in enumerate(lengths)], dim=0)  # [B, H]
+
+        last_hidden = last_hidden.squeeze(0)
         x_recon = self.fc((last_hidden))  # [B, output_dim]
         return x_recon
 
@@ -169,8 +175,8 @@ transform = transforms.Compose([
 # -------------------------------
 # モデルと最適化
 # -------------------------------
-encoder = Encoder(input_dim, hidden_dim, max_seq_len, base_vocab_size).to(device)
-decoder = Decoder(base_vocab_size, embedding_dim, hidden_dim, max_seq_len, input_dim).to(device)
+encoder = Encoder(input_dim, hidden_dim, max_seq_len, vocab_size, eos_token_id).to(device)
+decoder = Decoder(vocab_size, embedding_dim, hidden_dim, max_seq_len, input_dim).to(device)
 init_encoder_decoder(encoder, decoder)
 
 optimizer = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()), lr=lr)
@@ -197,8 +203,8 @@ for step in range(max_steps):
     # print(x.shape)
 
     optimizer.zero_grad()
-    message, loss_entropy = encoder(x, temperature)  # 長さ付き離散トークン系列
-    x_recon = decoder(message)  # EOS以降を無視して復元
+    message, lengths, loss_entropy = encoder(x, temperature)  # 長さ付き離散トークン系列
+    x_recon = decoder(message, lengths)  # EOS以降を無視して復元
 
     loss = loss_fn(x_recon, x.view(x.size(0), -1)) - w_entropy * loss_entropy
 
@@ -206,7 +212,7 @@ for step in range(max_steps):
     message_ids = message.argmax(dim=-1)  # [B, L]
     for index, msg in enumerate(message_ids):
         token_seq = msg.tolist()
-        print(f"{index} : {token_seq}")
+        # print(f"{index} : {token_seq}")
     # print(lengths)
 
     loss.backward()
@@ -216,7 +222,6 @@ for step in range(max_steps):
     optimizer.step()
     total_loss += loss.item()
 
-    print(f"Epoch {step + 1}, Loss: {total_loss:.4f}")
     loss_hist.append(total_loss)
     plt.figure(0)
     plt.clf()
@@ -227,6 +232,8 @@ for step in range(max_steps):
     # 再構成可視化
     # -------------------------------
     if step % int(max_steps / num_plots) == 0:
+        print(f"Epoch {step + 1}, Loss: {total_loss:.4f}")
+
         encoder.eval()
         decoder.eval()
         with torch.no_grad():
@@ -235,13 +242,14 @@ for step in range(max_steps):
                 x.append(transform(mnist_handler.get_random_image(index)))
             x = torch.stack(x).to(device)
 
-            message, _ = encoder(x, temperature)
-            x_recon = decoder(message)
+            message, lengths, _ = encoder(x, temperature)
+            x_recon = decoder(message, lengths)
             x_recon = x_recon.view(-1, 1, 28, 28).cpu()
 
             message_ids = message.argmax(dim=-1)  # [B, L]
             for index in range(10):
-                token_seq = message_ids[index].tolist()
+                length = lengths[index].item()
+                token_seq = message_ids[index][:length].tolist()
                 print(f"{index} : {token_seq}")
 
             for i in range(10):
