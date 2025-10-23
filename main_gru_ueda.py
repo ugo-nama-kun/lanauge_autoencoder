@@ -15,29 +15,33 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # -------------------------------
 input_dim = 28 * 28
 max_seq_len = 10
-base_vocab_size = 100
+base_vocab_size = 2
 embedding_dim = 32
-hidden_dim = 128
-temperature = 1.0
+hidden_dim = 512
+temperature = 0.5
 batch_size = 128
 max_steps = 10_000
 num_plots = 100
 lr = 3e-4
 max_grad_norm = 1.0
-w_entropy = 0.0
+dropout_p = 0.1
+w_entropy = 1e-3
 
 # -------------------------------
 # Encoder
 # -------------------------------
 class Encoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, max_seq_len, vocab_size):
+    def __init__(self, input_dim, hidden_dim, max_seq_len, vocab_size, dropout_p):
         super().__init__()
         self.encoder = nn.Linear(input_dim, hidden_dim)
+        # self.dropout = nn.Dropout(dropout_p)
 
-        self.gru = nn.GRU(vocab_size, hidden_dim, batch_first=True)
+        self.gru = nn.GRU(embedding_dim, hidden_dim, batch_first=True)
+        self.gru_ln = nn.LayerNorm(hidden_dim)
 
-        self.initial_embedding = nn.Parameter(torch.randn(1, vocab_size), requires_grad=True)
+        self.initial_embedding = nn.Parameter(torch.randn(1, embedding_dim), requires_grad=True)
         self.embedding = nn.Linear(vocab_size, embedding_dim, bias=False)
+        self.embed_ln = nn.LayerNorm(embedding_dim)
 
         self.token_proj = nn.Linear(hidden_dim, vocab_size)
         self.max_seq_len = max_seq_len
@@ -47,26 +51,30 @@ class Encoder(nn.Module):
         B = x.size(0)
         x = x.view(B, -1)
 
-        context = F.elu(self.encoder(x))  # [B, H]
+        context = F.leaky_relu(self.encoder(x))  # [B, H]
         h = context.unsqueeze(0)  # [1, B, H]
 
         # t=0 の入力: 学習BOSベクトルを [B, 1, E] に拡張
-        inp = self.initial_embedding.expand(B, 1, -1)  # [B, 1, E]
+        inp = self.embed_ln(self.initial_embedding).expand(B, 1, -1)  # [B, 1, E]
 
         tokens = []
+        prev_msg = None
         loss_entropy = 0.0
         for t in range(self.max_seq_len):
             out, h = self.gru(inp, h)  # out: [B, 1, H]
-            logits = self.token_proj(out.squeeze(1))
+            out = self.gru_ln(out.squeeze(1))  # [B, H]
 
+            logits = self.token_proj(out)  # [B, V]
+            probs = F.softmax(logits, dim=-1)
             y = F.gumbel_softmax(logits, tau=tau, hard=True, dim=-1)  # [B, V]
             tokens.append(y)
 
-            # エントロピー（平均は最後に取る）
-            probs = F.softmax(logits, dim=-1)
-            loss_entropy = loss_entropy + dist.Categorical(probs=probs).entropy()
+            # 次の時刻の入力を one-hot から埋め込みへ: y @ W で [B, E]
+            emb_next = self.embed_ln(self.embedding(y))  # [B, E]
+            inp = emb_next.unsqueeze(1)  # [B, 1, E]
 
-            inp = logits.unsqueeze(1)
+            # エントロピー（平均は最後に取る）
+            loss_entropy = loss_entropy + dist.Categorical(probs=probs).entropy()
 
         message = torch.stack(tokens, dim=1)  # [B, L, V]
         return message, (loss_entropy / self.max_seq_len).mean()
@@ -75,41 +83,55 @@ class Encoder(nn.Module):
 # -------------------------------
 # Decoder
 # -------------------------------
+class GaussianDropout(nn.Module):
+    # Gaussian dropout from : https://discuss.pytorch.org/t/gaussiandropout-implementation/151756/5
+
+    def __init__(self, p=0.5):
+        super(GaussianDropout, self).__init__()
+        if p <= 0 or p >= 1:
+            raise Exception("p value should accomplish 0 < p < 1")
+        self.p = p
+
+    def forward(self, x):
+        if self.training:
+            stddev = (self.p / (1.0 - self.p)) ** 0.5
+            epsilon = torch.randn_like(x) * stddev
+            return x * epsilon
+        else:
+            return x
 
 class Decoder(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim, max_seq_len, output_dim):
+    def __init__(self, vocab_size, embedding_dim, hidden_dim, max_seq_len, output_dim, dropout_p):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.max_seq_len = max_seq_len
         self.embedding = nn.Linear(vocab_size, embedding_dim)
-
-        self.initial_embedding = nn.Parameter(torch.randn(1, 1, embedding_dim), requires_grad=True)
+        self.dropout = GaussianDropout(dropout_p)
+        self.embed_ln = nn.LayerNorm(embedding_dim)
+        self.initial_embedding = nn.Parameter(torch.randn(1, embedding_dim), requires_grad=True)
 
         self.gru = nn.GRU(embedding_dim, hidden_dim, batch_first=True)
-        self.fc = nn.Sequential(
-            nn.Linear(hidden_dim, 256),
-            nn.ELU(),
-            nn.Linear(256, output_dim),
-            nn.Sigmoid()
-        )
+        self.gru_ln = nn.LayerNorm(hidden_dim)
+        self.fc = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, message):
         B = message.size(0)
 
         # z: [B, L, vocab_size], lengths: [B]
-        inp = self.initial_embedding.expand(B, -1, -1)
+        inp = self.embed_ln(self.initial_embedding).expand(B, -1, -1)
 
         h = torch.zeros(1, B, self.hidden_dim, device=message.device)  # [1, B, H]
         for t in range(self.max_seq_len):
-            _, h = self.gru(inp, h)  # out: [B, 1, H]
+            out, h = self.gru(inp, h)  # out: [B, 1, H]
+            h = self.gru_ln(h)
 
-            inp = self.embedding(message[:, t]).unsqueeze(1) # [B, L, emb]
+            inp = self.embedding(message[:, t]) # [B, L, emb]
+            inp = self.embed_ln(self.dropout(inp)).unsqueeze(1)
 
         # 最後の有効時刻の hidden state を抽出
         last_hidden = h.squeeze(0)
-        x_recon = self.fc((last_hidden))  # [B, output_dim]
+        x_recon = torch.sigmoid(self.fc(self.gru_ln(self.dropout(last_hidden))))  # [B, output_dim]
         return x_recon
-
 
 # -------------------------------
 # 初期化
@@ -155,8 +177,8 @@ transform = transforms.Compose([
 # -------------------------------
 # モデルと最適化
 # -------------------------------
-encoder = Encoder(input_dim, hidden_dim, max_seq_len, base_vocab_size).to(device)
-decoder = Decoder(base_vocab_size, embedding_dim, hidden_dim, max_seq_len, input_dim).to(device)
+encoder = Encoder(input_dim, hidden_dim, max_seq_len, base_vocab_size, dropout_p).to(device)
+decoder = Decoder(base_vocab_size, embedding_dim, hidden_dim, max_seq_len, input_dim, dropout_p).to(device)
 init_encoder_decoder(encoder, decoder)
 
 optimizer = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()), lr=lr)

@@ -13,8 +13,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ハイパーパラメータ
 # -------------------------------
 input_dim = 28 * 28
-max_seq_len = 20
-base_vocab_size = 8
+max_seq_len = 10
+base_vocab_size = 2
 eos_token_id = base_vocab_size
 vocab_size = base_vocab_size
 hidden_dim = 256

@@ -16,6 +16,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 input_dim = 28 * 28
 max_seq_len = 10
 base_vocab_size = 100
+eos_token_id = base_vocab_size
+vocab_size = base_vocab_size + 1  # EOSを追加
+
 embedding_dim = 32
 hidden_dim = 128
 temperature = 1.0
@@ -55,6 +58,9 @@ class Encoder(nn.Module):
 
         tokens = []
         loss_entropy = 0.0
+        lengths = torch.full((batch_size,), self.max_seq_len, dtype=torch.long, device=x.device)
+        finished = torch.zeros(batch_size, dtype=torch.bool, device=x.device)
+
         for t in range(self.max_seq_len):
             out, h = self.gru(inp, h)  # out: [B, 1, H]
             logits = self.token_proj(out.squeeze(1))
@@ -68,8 +74,16 @@ class Encoder(nn.Module):
 
             inp = logits.unsqueeze(1)
 
+            pred_id = y.argmax(dim=-1)
+            newly_finished = (pred_id == self.eos_token_id) & (~finished)
+            lengths[newly_finished] = t + 1
+            finished |= newly_finished
+            if finished.all():
+                break
+
+
         message = torch.stack(tokens, dim=1)  # [B, L, V]
-        return message, (loss_entropy / self.max_seq_len).mean()
+        return message, lengths, (loss_entropy / self.max_seq_len).mean()
 
 
 # -------------------------------
@@ -93,7 +107,7 @@ class Decoder(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, message):
+    def forward(self, message, lengths):
         B = message.size(0)
 
         # z: [B, L, vocab_size], lengths: [B]
