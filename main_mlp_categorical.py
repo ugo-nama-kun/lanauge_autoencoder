@@ -11,39 +11,33 @@ from util import init_model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # -------------------------------
-# ハイパーパラメータ
+# ハイパーパラメータ one-hot representation
 # -------------------------------
 input_dim = 28 * 28
-max_seq_len = 10
-base_vocab_size = 2
-eos_token_id = base_vocab_size
-vocab_size = base_vocab_size
+vocab_size = 1024
 hidden_dim = 256
 temperature = 1
 batch_size = 256
-max_steps = 2_000
+max_steps = 1_000
 lr = 1e-2
 
 # -------------------------------
 # Encoder（MLPベース）
 # -------------------------------
 class Encoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, max_seq_len, vocab_size, eos_token_id):
+    def __init__(self, input_dim, hidden_dim, vocab_size):
         super().__init__()
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ELU(),
-            nn.Linear(hidden_dim, max_seq_len * vocab_size)
+            nn.Linear(hidden_dim, vocab_size)
         )
-        self.max_seq_len = max_seq_len
         self.vocab_size = vocab_size
-        self.eos_token_id = eos_token_id
 
     def forward(self, x, tau):
         batch_size = x.size(0)
         x = x.view(batch_size, -1)  # [B, input_dim]
         logits = self.mlp(x)  # [B, max_seq_len * vocab_size]
-        logits = logits.view(batch_size, self.max_seq_len, self.vocab_size)  # [B, L, V]
         y = F.gumbel_softmax(logits, tau=tau, hard=True)  # [B, L, V]
         return y
 
@@ -51,9 +45,9 @@ class Encoder(nn.Module):
 # Decoder（MLPベース）
 # -------------------------------
 class Decoder(nn.Module):
-    def __init__(self, vocab_size, seq_len, hidden_dim, output_dim):
+    def __init__(self, vocab_size, hidden_dim, output_dim):
         super().__init__()
-        self.input_dim = vocab_size * seq_len  # flatten用
+        self.input_dim = vocab_size  # flatten用
         self.mlp = nn.Sequential(
             nn.Linear(self.input_dim, hidden_dim),
             nn.ELU(),
@@ -61,7 +55,7 @@ class Decoder(nn.Module):
         )
 
     def forward(self, z):
-        z_flat = z.view(z.size(0), -1)  # [B, L*V]
+        z_flat = z.view(z.size(0), -1)  # [B, V]
         return F.sigmoid(self.mlp(z_flat))        # [B, output_dim]
 
 # -------------------------------
@@ -73,8 +67,8 @@ transform = transforms.ToTensor()
 # -------------------------------
 # モデルと最適化
 # -------------------------------
-encoder = init_model(Encoder(input_dim, hidden_dim, max_seq_len, vocab_size, eos_token_id).to(device))
-decoder = init_model(Decoder(vocab_size, max_seq_len, hidden_dim, input_dim).to(device))
+encoder = init_model(Encoder(input_dim, hidden_dim, vocab_size).to(device))
+decoder = init_model(Decoder(vocab_size, hidden_dim, input_dim).to(device))
 optimizer = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()), lr=lr)
 loss_fn = nn.BCELoss()
 
