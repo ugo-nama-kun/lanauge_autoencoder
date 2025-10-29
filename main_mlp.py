@@ -15,13 +15,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # -------------------------------
 input_dim = 28 * 28
 max_seq_len = 10
-base_vocab_size = 2
+base_vocab_size = 20
 eos_token_id = base_vocab_size
 vocab_size = base_vocab_size
 hidden_dim = 256
 temperature = 1
 batch_size = 256
-max_steps = 2_000
+max_steps = 1_000
 lr = 1e-2
 
 # -------------------------------
