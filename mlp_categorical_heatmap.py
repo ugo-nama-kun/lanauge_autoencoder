@@ -30,6 +30,7 @@ temperature = 1
 batch_size = 64
 max_steps = 2_000
 lr = 1e-2
+fixed_id_images = True
 
 # -------------------------------
 # 提示コードのモデル定義（one-hot 表現）
@@ -73,7 +74,7 @@ def sample_batch(mnist_handler, image_types, batch_size, transform, device):
     xs = []
     for _ in range(batch_size):
         idx = np.random.randint(0, image_types)
-        img = transform(mnist_handler.get_random_image(idx))
+        img = transform(mnist_handler.get_random_image(idx, fixed_id_images))
         xs.append(img)
     x = torch.stack(xs).to(device)  # [B, 1, 28, 28]
     return x
@@ -172,7 +173,11 @@ def main():
     secax.set_xticklabels([f"{2**k:,}" for k in x_exponents], rotation=45, ha="left")
     secax.set_xlabel("vocab_size (= 2^k)")
 
-    plt.title("Final total_loss over (vocab_size exponent × image_types)")
+    if fixed_id_images:
+        plt.title("Final total_loss over (vocab_size exponent × image_types) : fixed_image_id")
+    else:
+        plt.title("Final total_loss over (vocab_size exponent × image_types)")
+
     plt.tight_layout()
     plt.show()
     print("== sweep done ==")

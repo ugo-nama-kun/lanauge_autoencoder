@@ -24,6 +24,7 @@ batch_size = 64
 max_steps = 2_000
 lr = 1e-2
 image_types = 10
+fixed_id_images = True
 
 # -------------------------------
 # Encoder（MLPベース）
@@ -95,7 +96,7 @@ for step in range(max_steps):
     x = []
     for _ in range(batch_size):
         index = np.random.randint(0, image_types)
-        img = transform(mnist_handler.get_random_image(index))
+        img = transform(mnist_handler.get_random_image(index, fixed_id_images))
         x.append(img)
     x = torch.stack(x).to(device)  # [B, 1, 28, 28]
 
@@ -124,7 +125,7 @@ plt.figure()
 with torch.no_grad():
     x = []
     for index in range(image_types):
-        x.append(transform(mnist_handler.get_random_image(index)))
+        x.append(transform(mnist_handler.get_random_image(index, fixed_id_images)))
     x = torch.stack(x).to(device)
 
     message = encoder(x, temperature)
