@@ -118,7 +118,7 @@ def run_once(max_seq_len_val: int, image_types_val: int, seed: int = 0) -> float
 # -------------------------------
 def main():
     x_range = list(range(1, 21))   # max_seq_len: 1..20 (横軸)
-    y_range = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # image_types: 1..10 (縦軸)
+    y_range = list(range(1, 11))  # image_types: 1..10 (縦軸)
 
     loss_grid = np.zeros((len(y_range), len(x_range)), dtype=np.float32)
 
