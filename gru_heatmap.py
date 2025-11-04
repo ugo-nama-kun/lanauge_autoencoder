@@ -34,6 +34,7 @@ max_steps = 10_000
 lr = 3e-4
 max_grad_norm = 1.0
 w_entropy = 0.0
+fixed_id_images = True
 
 # -------------------------------
 # Encoder（提示コード準拠）
@@ -149,7 +150,7 @@ def sample_batch(mnist_handler, image_types_val, batch_size, transform, device):
     xs = []
     for _ in range(batch_size):
         idx = np.random.randint(0, image_types_val)
-        img = transform(mnist_handler.get_random_image(idx))
+        img = transform(mnist_handler.get_random_image(idx, fixed_id_images))
         xs.append(img)
     x = torch.stack(xs).to(device)  # [B, 1, 28, 28]
     return x
