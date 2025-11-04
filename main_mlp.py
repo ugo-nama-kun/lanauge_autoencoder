@@ -14,15 +14,16 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ハイパーパラメータ
 # -------------------------------
 input_dim = 28 * 28
-max_seq_len = 10
-base_vocab_size = 20
+max_seq_len = 20
+base_vocab_size = 2
 eos_token_id = base_vocab_size
 vocab_size = base_vocab_size
 hidden_dim = 256
 temperature = 1
-batch_size = 256
-max_steps = 1_000
+batch_size = 64
+max_steps = 2_000
 lr = 1e-2
+image_types = 10
 
 # -------------------------------
 # Encoder（MLPベース）
@@ -93,7 +94,7 @@ for step in range(max_steps):
     # 入力画像の取得
     x = []
     for _ in range(batch_size):
-        index = np.random.randint(0, 10)
+        index = np.random.randint(0, image_types)
         img = transform(mnist_handler.get_random_image(index))
         x.append(img)
     x = torch.stack(x).to(device)  # [B, 1, 28, 28]
@@ -122,7 +123,7 @@ decoder.eval()
 plt.figure()
 with torch.no_grad():
     x = []
-    for index in range(10):
+    for index in range(image_types):
         x.append(transform(mnist_handler.get_random_image(index)))
     x = torch.stack(x).to(device)
 
@@ -131,12 +132,12 @@ with torch.no_grad():
     x_recon = x_recon.view(-1, 1, 28, 28).cpu()
 
     message_ids = message.argmax(dim=-1)  # [B, L]
-    for index in range(10):
+    for index in range(image_types):
         token_seq = message_ids[index].tolist()
         print(f"{index} : {token_seq}")
 
-    fig, axs = plt.subplots(2, 10, figsize=(15, 3))
-    for i in range(10):
+    fig, axs = plt.subplots(2, image_types, figsize=(15, 3))
+    for i in range(image_types):
         axs[0, i].imshow(x[i].cpu().squeeze(), cmap='gray')
         axs[1, i].imshow(x_recon[i].squeeze(), cmap='gray')
         axs[0, i].axis('off')

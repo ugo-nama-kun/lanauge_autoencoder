@@ -26,6 +26,8 @@ lr = 3e-4
 max_grad_norm = 1.0
 w_entropy = 0.0
 
+image_types = 10
+
 # -------------------------------
 # Encoder
 # -------------------------------
@@ -166,7 +168,7 @@ loss_fn = nn.BCELoss()
 # 学習ループ
 # -------------------------------
 print("start")
-fig_visual, axs_visual = plt.subplots(2, 10, figsize=(15, 3))
+fig_visual, axs_visual = plt.subplots(2, image_types, figsize=(15, 3))
 
 loss_hist = []
 for step in range(max_steps):
@@ -176,7 +178,7 @@ for step in range(max_steps):
 
     x = []
     for _ in range(batch_size):
-        index = np.random.randint(0, 10)
+        index = np.random.randint(0, image_types)
         x.append(transform(mnist_handler.get_random_image(index)))
 
     x = torch.stack(x).to(device)
@@ -217,7 +219,7 @@ for step in range(max_steps):
         decoder.eval()
         with torch.no_grad():
             x = []
-            for index in range(10):
+            for index in range(image_types):
                 x.append(transform(mnist_handler.get_random_image(index)))
             x = torch.stack(x).to(device)
 
@@ -226,11 +228,11 @@ for step in range(max_steps):
             x_recon = x_recon.view(-1, 1, 28, 28).cpu()
 
             message_ids = message.argmax(dim=-1)  # [B, L]
-            for index in range(10):
+            for index in range(image_types):
                 token_seq = message_ids[index].tolist()
                 print(f"{index} : {token_seq}")
 
-            for i in range(10):
+            for i in range(image_types):
                 axs_visual[0, i].imshow(x[i].cpu().squeeze(), cmap='gray')
                 axs_visual[1, i].imshow(x_recon[i].squeeze(), cmap='gray')
                 axs_visual[0, i].axis('off')

@@ -26,12 +26,13 @@ class MNISTHandler:
             class_indices[label.item()].append(i)
         return class_indices
 
-    def get_random_image(self, class_number):
+    def get_random_image(self, class_number, fixed_id=False):
         """
         Returns a random image from the specified class.
 
         Args:
             class_number (int): The class label (0-9) to retrieve an image from.
+            fixed_id (bool): use fixed index of the image to return.
 
         Returns:
             PIL.Image: The image corresponding to the specified class.
@@ -40,6 +41,9 @@ class MNISTHandler:
             raise ValueError("Invalid class number. Choose a number between 0 and 9.")
 
         random_index = random.choice(self.class_indices[class_number])
+        if fixed_id:
+            # fixed id image
+            random_index = self.class_indices[class_number][0]
         image, label = self.dataset[random_index]
         return image
 
@@ -55,6 +59,25 @@ if __name__ == '__main__':
     for i in range(10):
         img = mnist_handler.get_random_image(i)
 
+        # Display the image
+        print(transform(img).max(), transform(img).min())
+        plt.imshow(img, cmap="gray")
+        plt.title(f"Random MNIST Image of {i}")
+        plt.axis("off")
+        plt.pause(0.3)
+
+    # Example usage
+    for i in range(5):
+        img = mnist_handler.get_random_image(0, fixed_id=False)
+        # Display the image
+        print(transform(img).max(), transform(img).min())
+        plt.imshow(img, cmap="gray")
+        plt.title(f"Random MNIST Image of {i}")
+        plt.axis("off")
+        plt.pause(0.3)
+
+    for i in range(5):
+        img = mnist_handler.get_random_image(0, fixed_id=True)
         # Display the image
         print(transform(img).max(), transform(img).min())
         plt.imshow(img, cmap="gray")
