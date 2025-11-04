@@ -12,8 +12,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ハイパーパラメータ
 # -------------------------------
 input_dim = 28 * 28
-max_seq_len = 20
-base_vocab_size = 8
+max_seq_len = 10
+base_vocab_size = 100
 eos_token_id = base_vocab_size
 vocab_size = base_vocab_size + 1  # EOSトークン追加
 embedding_dim = 64
@@ -22,8 +22,8 @@ nhead = 4
 nlayers = 2
 temperature = 0.5
 batch_size = 64
-max_steps = 1_000
-lr = 3e-4
+max_steps = 10_000
+lr = 1e-4
 
 # -------------------------------
 # Positional Encoding
@@ -63,13 +63,21 @@ class TransformerEncoder(nn.Module):
         x = x.view(batch_size, -1)
         h0 = F.relu(self.fc(x))  # [B, H]
 
-        token_input = self.token_input.expand(batch_size, -1, -1)  # [B, L, H]
-        token_input = self.pos_enc(token_input)
+        # トークン列を展開
+        token_input = self.token_input.expand(batch_size, -1, -1).clone()  # [B, L, H]
+
+        # 先頭位置に h0 を挿入（置換）
+        token_input[:, 0, :] = h0  # [B, L, H]
+
+        # 位置エンコーディング付与 → Transformer
+        token_input = self.pos_enc(token_input)  # [B, L, H]
         out = self.transformer(token_input)  # [B, L, H]
 
-        logits = self.token_proj(out)  # [B, L, vocab_size]
-        y = F.gumbel_softmax(logits, tau=tau, hard=True)  # [B, L, vocab_size]
+        # 語彙へ射影 → Gumbel-Softmax サンプリング
+        logits = self.token_proj(out)  # [B, L, V]
+        y = F.gumbel_softmax(logits, tau=tau, hard=True)  # [B, L, V]
 
+        # EOS による長さ計算
         token_ids = y.argmax(dim=-1)  # [B, L]
         finished = token_ids == self.eos_token_id
         lengths = finished.float().argmax(dim=1) + 1
@@ -111,7 +119,7 @@ transform = transforms.Compose([transforms.ToTensor()])
 # -------------------------------
 encoder = TransformerEncoder(input_dim, hidden_dim, max_seq_len, vocab_size, eos_token_id, nhead, nlayers).to(device)
 decoder = TransformerDecoder(vocab_size, embedding_dim, hidden_dim, input_dim, nhead, nlayers).to(device)
-optimizer = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()), lr=lr)
+optimizer = torch.optim.AdamW(list(encoder.parameters()) + list(decoder.parameters()), lr=lr, weight_decay=1e-5)
 loss_fn = nn.BCELoss()
 
 # -------------------------------
